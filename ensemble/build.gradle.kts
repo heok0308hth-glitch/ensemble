@@ -10,7 +10,7 @@ kotlin {
 }
 
 dependencies {
-    api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     // Android ships org.json in the platform: exclude it there with
     // implementation("…:ensemble:…") { exclude(group = "org.json", module = "json") }
     api("org.json:json:20240303")
