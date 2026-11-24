@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: test · JDK ${{ matrix.java }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [17, 21]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Unit tests
+        run: ./gradlew :ensemble:test --no-daemon
+      - name: Demo — a simulated five-vendor team, no keys
+        run: ./gradlew :samples:cli:run --args="--demo --plain" --no-daemon
+      - name: Benchmark — 150 seeded runs under virtual time
+        run: ./gradlew :samples:bench:run --no-daemon
+      - name: Publish to Maven Local (what JitPack runs)
+        run: ./gradlew :ensemble:publishToMavenLocal -x test --no-daemon
+      - name: Benchmark summary
+        if: matrix.java == 17
+        run: cat docs/bench.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reports-jdk${{ matrix.java }}
+          path: |
+            ensemble/build/reports/tests
+            docs/bench.md
+            docs/hero.svg

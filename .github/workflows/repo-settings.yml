@@ -1,0 +1,44 @@
+name: Repository settings
+
+# Settings as code: description, website and topics live in .github/repo.json.
+# GitHub's built-in token cannot edit them, so this needs one secret:
+#   ADMIN_TOKEN — a fine-grained token for this repository only, with
+#                 "Administration: Read and write" permission.
+# Without the secret the job explains what to do and exits cleanly.
+on:
+  push:
+    branches: [main]
+    paths: [.github/repo.json]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply description, website and topics
+        env:
+          GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            {
+              echo "### ADMIN_TOKEN is not set — nothing applied"
+              echo "1. github.com/settings/personal-access-tokens/new → Only select repositories: **ensemble** → Repository permissions → **Administration: Read and write**."
+              echo "2. This repository → Settings → Secrets and variables → Actions → New repository secret → name **ADMIN_TOKEN**, paste the token."
+              echo "3. Actions → Repository settings → Run workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          desc=$(jq -r .description .github/repo.json)
+          home=$(jq -r .homepage .github/repo.json)
+          gh api -X PATCH "repos/$REPO" -f description="$desc" -f homepage="$home" --silent
+          jq '{names: .topics}' .github/repo.json | gh api -X PUT "repos/$REPO/topics" --input - --silent
+          {
+            echo "### Applied"
+            echo "- description: $desc"
+            echo "- topics: $(jq -r '.topics | join(", ")' .github/repo.json)"
+          } >> "$GITHUB_STEP_SUMMARY"

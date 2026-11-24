@@ -1,0 +1,10 @@
+{
+  "description": "Make Claude, GPT, Gemini, Grok, DeepSeek and local models work as one team. Kotlin multi-agent orchestration: a conductor plans, a load-aware market dispatches, a shared board connects, rival vendors cross-review.",
+  "homepage": "https://github.com/heok0308hth-glitch/ensemble#readme",
+  "topics": [
+    "kotlin", "multi-agent", "multi-agent-systems", "ai-agents", "agentic-ai",
+    "llm", "llm-orchestration", "agent-orchestration", "kotlin-library", "coroutines",
+    "openai", "anthropic", "claude", "gemini", "deepseek",
+    "ollama", "android", "jvm", "autonomous-agents", "orchestration"
+  ]
+}

@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+title: "Ensemble: make several LLMs work as one team"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - name: "Heo Taehyeok"
+    alias: "heok0308hth-glitch"
+repository-code: "https://github.com/heok0308hth-glitch/ensemble"
+license: MIT
+version: 0.1.0
+date-released: 2026-11-24
+keywords:
+  - multi-agent systems
+  - LLM orchestration
+  - Kotlin
+  - AI agents
+abstract: >-
+  Ensemble is a Kotlin library that makes several large language models work as one
+  team. A center plans and reviews, a load-aware market dispatches tasks by real
+  strengths and live track record, a shared board connects teammates, and a model
+  from a different vendor cross-checks every result. A company mode runs multi-hour
+  projects with charters, sprints, rubric grading, stand-ups and final QA.

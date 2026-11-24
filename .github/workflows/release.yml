@@ -1,0 +1,61 @@
+name: Release
+
+# Bump VERSION in gradle.properties and add a CHANGELOG section: this workflow tags the
+# release, attaches the jars and asks JitPack to build it. Nothing to do by hand.
+on:
+  push:
+    branches: [main]
+    paths: [gradle.properties, CHANGELOG.md]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Read version
+        id: v
+        run: echo "version=$(grep '^VERSION=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+      - name: Skip if already released
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.v.outputs.version }}" >/dev/null 2>&1; then echo "yes=true" >> "$GITHUB_OUTPUT"; else echo "yes=false" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/setup-java@v4
+        if: steps.exists.outputs.yes == 'false'
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.exists.outputs.yes == 'false'
+      - name: Test and build jars
+        if: steps.exists.outputs.yes == 'false'
+        run: ./gradlew :ensemble:test :ensemble:jar :ensemble:sourcesJar --no-daemon
+      - name: Release notes from CHANGELOG
+        if: steps.exists.outputs.yes == 'false'
+        run: |
+          awk -v v="${{ steps.v.outputs.version }}" '
+            $0 ~ "^## \\[?"v"\\]?" {on=1; next}
+            on && /^## / {exit}
+            on {print}
+          ' CHANGELOG.md > notes.md
+          printf '\n\n```kotlin\nrepositories { maven("https://jitpack.io") }\ndependencies { implementation("com.github.heok0308hth-glitch.ensemble:ensemble:v%s") }\n```\n' "${{ steps.v.outputs.version }}" >> notes.md
+      - name: Create release
+        if: steps.exists.outputs.yes == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.v.outputs.version }}" \
+            --target "${{ github.sha }}" \
+            --title "Ensemble v${{ steps.v.outputs.version }}" \
+            --notes-file notes.md \
+            ensemble/build/libs/*.jar
+      - name: Ask JitPack to build the tag
+        if: steps.exists.outputs.yes == 'false'
+        run: curl -fsS --max-time 600 "https://jitpack.io/api/builds/com.github.heok0308hth-glitch/ensemble/v${{ steps.v.outputs.version }}" || echo "JitPack will build on first request"
