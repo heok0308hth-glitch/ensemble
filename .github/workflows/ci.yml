@@ -18,12 +18,12 @@ jobs:
       matrix:
         java: [17, 21]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: ${{ matrix.java }}
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - name: Unit tests
         run: ./gradlew :ensemble:test --no-daemon
       - name: Demo — a simulated five-vendor team, no keys
@@ -35,7 +35,7 @@ jobs:
       - name: Benchmark summary
         if: matrix.java == 17
         run: cat docs/bench.md >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: reports-jdk${{ matrix.java }}

@@ -3,7 +3,7 @@ kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarg
 java { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 dependencies {
     implementation(project(":ensemble"))
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")   // virtual time: hours of simulated work in seconds
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")   // virtual time: hours of simulated work in seconds
 }
 application { mainClass.set("BenchKt") }
 tasks.named<JavaExec>("run") { workingDir = rootDir; jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8") }

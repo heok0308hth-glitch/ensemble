@@ -3,6 +3,17 @@ updates:
   - package-ecosystem: gradle
     directory: /
     schedule: { interval: monthly }
+    groups:
+      libraries: { patterns: ["*"] }
+    ignore:
+      # The library is compiled with Kotlin 2.1 on purpose: consumers on Kotlin 2.1/2.2 (and
+      # Android projects pinned to them) can only read metadata up to one version ahead.
+      - dependency-name: "org.jetbrains.kotlin.jvm"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "gradle-wrapper"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: monthly }
+    groups:
+      actions: { patterns: ["*"] }
