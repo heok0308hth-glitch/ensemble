@@ -65,12 +65,15 @@ jobs:
       - name: Build on JitPack
         run: |
           v="v$(grep '^VERSION=' gradle.properties | cut -d= -f2)"
-          url="https://jitpack.io/com/github/heok0308hth-glitch/ensemble/ensemble/$v/ensemble-$v.pom"
+          base="https://jitpack.io/com/github/heok0308hth-glitch/ensemble"
           for i in 1 2 3; do
-            code=$(curl -s -o pom.xml -w '%{http_code}' --max-time 900 "$url") || code=000
-            echo "attempt $i → HTTP $code"
-            [ "$code" = 200 ] && { head -c 400 pom.xml; echo; echo "### JitPack: $v is available" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+            for url in "$base/ensemble/$v/ensemble-$v.pom" "$base/$v/ensemble-$v.pom"; do
+              code=$(curl -s -o pom.xml -w '%{http_code}' --max-time 900 "$url") || code=000
+              echo "attempt $i · $url → HTTP $code"
+              if [ "$code" = 200 ]; then head -c 600 pom.xml; echo; echo "### JitPack: $v is available at $url" >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+            done
             sleep 60
           done
-          curl -s "https://jitpack.io/api/builds/com.github.heok0308hth-glitch/ensemble/$v" | head -c 1200
-          echo "### JitPack has not finished $v yet — see https://jitpack.io/#heok0308hth-glitch/ensemble" >> "$GITHUB_STEP_SUMMARY"
+          echo "--- JitPack build log (tail)"
+          curl -s "$base/$v/build.log" | tail -60
+          echo "### JitPack has not published $v yet — see https://jitpack.io/#heok0308hth-glitch/ensemble" >> "$GITHUB_STEP_SUMMARY"
