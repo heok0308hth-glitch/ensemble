@@ -201,11 +201,12 @@ private object Svg {
                 val b = draw * start / span
                 val d = maxOf(0.15, draw * (end - start) / span)
                 val id = "c${sb.length}"
-                sb.append("""<g><rect x="${"%.1f".format(Locale.US, x)}" y="$y" width="0" height="18" rx="3" fill="${if (accent) BRASS else INK}" opacity="${if (accent) 1 else 0.86}">""")
+                // Base attributes hold the finished picture, so viewers without SMIL still show the whole run.
+                sb.append("""<g><rect x="${"%.1f".format(Locale.US, x)}" y="$y" width="${"%.1f".format(Locale.US, bw)}" height="18" rx="3" fill="${if (accent) BRASS else INK}" opacity="${if (accent) 1 else 0.86}">""")
                 sb.append("""<set attributeName="width" to="0" begin="loop.begin"/>""")
                 sb.append("""<animate id="$id" attributeName="width" from="0" to="${"%.1f".format(Locale.US, bw)}" begin="loop.begin+${"%.2f".format(Locale.US, b)}s" dur="${"%.2f".format(Locale.US, d)}s" fill="freeze"/></rect>""")
                 val text = short.takeIf { it.length * 6.7 + 12 < bw }
-                if (text != null) sb.append("""<text x="${"%.1f".format(Locale.US, x + 6)}" y="${y + 13}" fill="$BG" font-size="11" opacity="0"><set attributeName="opacity" to="0" begin="loop.begin"/><set attributeName="opacity" to="1" begin="$id.end"/>${esc(text)}</text>""")
+                if (text != null) sb.append("""<text x="${"%.1f".format(Locale.US, x + 6)}" y="${y + 13}" fill="$BG" font-size="11"><set attributeName="opacity" to="0" begin="loop.begin"/><set attributeName="opacity" to="1" begin="$id.end"/>${esc(text)}</text>""")
                 sb.append("</g>")
             }
             val idx = members.withIndex().associate { it.value to it.index }
@@ -220,7 +221,7 @@ private object Svg {
                     c.id == "final" -> "compose"; c.id.startsWith("review") -> "review"; c.id.startsWith("gap") -> "gaps"; c.id.startsWith("x") -> "extra"; else -> c.id })
             }
             val endX = left + (run.minutes * 60_000 - t0) * px
-            sb.append("""<text x="${"%.0f".format(Locale.US, minOf(endX + 8, w - right - 60.0))}" y="${top}" fill="${if (members.size > 1) BRASS else DIM}" font-size="13" opacity="0"><set attributeName="opacity" to="0" begin="loop.begin"/><set attributeName="opacity" to="1" begin="loop.begin+${draw}s"/>${f1(run.minutes)} min</text>""")
+            sb.append("""<text x="${"%.0f".format(Locale.US, minOf(endX + 8, w - right - 60.0))}" y="${top}" fill="${if (members.size > 1) BRASS else DIM}" font-size="13"><set attributeName="opacity" to="0" begin="loop.begin"/><set attributeName="opacity" to="1" begin="loop.begin+${draw}s"/>${f1(run.minutes)} min</text>""")
         }
 
         lane(solo, 112, "SOLO · THE STRONGEST MODEL DOES EVERYTHING", listOf("Claude"))
