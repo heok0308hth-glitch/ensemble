@@ -45,7 +45,7 @@ jobs:
             on && /^## / {exit}
             on {print}
           ' CHANGELOG.md > notes.md
-          printf '\n\n```kotlin\nrepositories { maven("https://jitpack.io") }\ndependencies { implementation("com.github.heok0308hth-glitch.ensemble:ensemble:v%s") }\n```\n' "${{ steps.v.outputs.version }}" >> notes.md
+          printf '\n\n```kotlin\nrepositories { maven("https://jitpack.io") }\ndependencies { implementation("com.github.heok0308hth-glitch:ensemble:v%s") }\n```\n' "${{ steps.v.outputs.version }}" >> notes.md
       - name: Create release
         if: steps.exists.outputs.yes == 'false'
         env:
@@ -67,7 +67,7 @@ jobs:
           v="v$(grep '^VERSION=' gradle.properties | cut -d= -f2)"
           base="https://jitpack.io/com/github/heok0308hth-glitch/ensemble"
           for i in 1 2 3; do
-            for url in "$base/ensemble/$v/ensemble-$v.pom" "$base/$v/ensemble-$v.pom"; do
+            for url in "$base/$v/ensemble-$v.pom"; do
               code=$(curl -s -o pom.xml -w '%{http_code}' --max-time 900 "$url") || code=000
               echo "attempt $i · $url → HTTP $code"
               if [ "$code" = 200 ]; then head -c 600 pom.xml; echo; echo "### JitPack: $v is available at $url" >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
@@ -77,3 +77,36 @@ jobs:
           echo "--- JitPack build log (tail)"
           curl -s "$base/$v/build.log" | tail -60
           echo "### JitPack has not published $v yet — see https://jitpack.io/#heok0308hth-glitch/ensemble" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install from JitPack in a fresh project, exactly as the README says
+        run: |
+          v="v$(grep '^VERSION=' gradle.properties | cut -d= -f2)"
+          mkdir -p /tmp/consumer/src/main/kotlin && cp -r gradlew gradle /tmp/consumer/ && cd /tmp/consumer
+          cat > settings.gradle.kts <<KTS
+          dependencyResolutionManagement { repositories { mavenCentral(); maven("https://jitpack.io") } }
+          rootProject.name = "consumer"
+          KTS
+          cat > build.gradle.kts <<KTS
+          plugins { kotlin("jvm") version "2.1.21"; application }
+          repositories { mavenCentral(); maven("https://jitpack.io") }
+          dependencies { implementation("com.github.heok0308hth-glitch:ensemble:$v") }
+          kotlin { jvmToolchain(17) }
+          application { mainClass.set("MainKt") }
+          KTS
+          cat > src/main/kotlin/Main.kt <<'KT'
+          import com.ht.ensemble.*
+          import com.ht.ensemble.sim.Simulated
+          import kotlinx.coroutines.runBlocking
+          fun main() = runBlocking {
+              val fast = Simulated.Profile(latencyMs = 20L..60L)
+              val team = Ensemble.team { listOf(Vendor.CLAUDE, Vendor.GPT, Vendor.GEMINI).forEach { member(it, Simulated.port(it, fast)) } }
+              val r = team.conduct("Smoke test from a fresh project")
+              check(r.ok) { r.text }
+              println("installed from JitPack and ran a team: " + r.text.lines().last())
+          }
+          KT
+          sed -i 's/^          //' settings.gradle.kts build.gradle.kts src/main/kotlin/Main.kt
+          ./gradlew run --no-daemon -q

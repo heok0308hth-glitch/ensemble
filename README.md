@@ -111,13 +111,13 @@ The speedup is bounded by the plan's dependency chain and by the center's serial
 dependencyResolutionManagement { repositories { mavenCentral(); maven("https://jitpack.io") } }
 
 // build.gradle.kts
-dependencies { implementation("com.github.heok0308hth-glitch.ensemble:ensemble:v0.1.0") }
+dependencies { implementation("com.github.heok0308hth-glitch:ensemble:v0.1.0") }
 ```
 
 It needs JVM 17+. Its only dependencies are `kotlinx-coroutines-core` and `org.json`. On **Android**, the platform already ships `org.json`, so exclude it:
 
 ```kotlin
-implementation("com.github.heok0308hth-glitch.ensemble:ensemble:v0.1.0") { exclude(group = "org.json", module = "json") }
+implementation("com.github.heok0308hth-glitch:ensemble:v0.1.0") { exclude(group = "org.json", module = "json") }
 ```
 
 ## Connect any model

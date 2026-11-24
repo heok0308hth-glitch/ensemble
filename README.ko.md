@@ -56,7 +56,7 @@ val brief = team.conduct("12월에 마감하는 디자인 공모전 세 곳을 �
 
 ```kotlin
 repositories { maven("https://jitpack.io") }
-dependencies { implementation("com.github.heok0308hth-glitch.ensemble:ensemble:v0.1.0") }
+dependencies { implementation("com.github.heok0308hth-glitch:ensemble:v0.1.0") }
 // 안드로이드: { exclude(group = "org.json", module = "json") }
 ```
 
