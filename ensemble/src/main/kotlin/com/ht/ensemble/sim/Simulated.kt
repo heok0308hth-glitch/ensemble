@@ -35,6 +35,12 @@ object Simulated {
         val limitAfter: Int = Int.MAX_VALUE,
         val quality: Double = 8.2,
         val seed: Int = 7,
+        /** Chance a reply is the prompt itself — what a web client returns when it reads the user's own bubble. */
+        val echoRate: Double = 0.0,
+        /** Chance a long reply stops mid-way, as streaming captures and output limits do. */
+        val cutRate: Double = 0.0,
+        /** Chance a grade comes back as prose nobody can parse. */
+        val unreadableGradeRate: Double = 0.0,
     )
 
     fun port(vendor: Vendor, profile: Profile = Profile(), name: String = vendor.label): LlmPort = SimPort(vendor, profile, name)
@@ -50,7 +56,12 @@ object Simulated {
             delay(ms)
             if (n > p.limitAfter) return LlmReply("You've reached your usage limit. Try again in 3 hours.", "HTTP429", ms)
             if (rnd.nextDouble() < p.failRate) return LlmReply("", "HTTP503:overloaded", ms)
-            return LlmReply(answer(prompt), "SIM", ms)
+            val kind = Prompts.kindOf(prompt)
+            if (kind in WORK && rnd.nextDouble() < p.echoRate) return LlmReply("You\n" + prompt, "SIM", ms)
+            if (kind in GRADES && rnd.nextDouble() < p.unreadableGradeRate) return LlmReply("Overall it reads well and covers the brief; a few sections could go deeper.", "SIM", ms)
+            val text = answer(prompt)
+            if (kind in WORK && text.length > 400 && rnd.nextDouble() < p.cutRate) return LlmReply(text.take(text.length * 2 / 3).trimEnd() + " and the remaining “", "SIM", ms)
+            return LlmReply(text, "SIM", ms)
         }
 
         private fun goal(prompt: String) = Regex("""(?m)^(?:\[ensemble:[a-z-]+]\s*)?(?:Team goal|Goal):\s*(.+)$""").find(prompt)?.groupValues?.get(1)?.trim() ?: "the goal"
@@ -71,6 +82,7 @@ object Simulated {
                 Prompts.REWORK -> ticket(prompt, g, rev = 1 + rnd.nextInt(2))
                 Prompts.GRADE, Prompts.FINAL_QA -> grade(prompt)
                 Prompts.STANDUP -> standup(prompt)
+                Prompts.CONTINUE -> "quoted figure is the conservative one.” The plan holds under that assumption.\n\n" + paragraph(g, 1)
                 Prompts.REPORT -> "# Project report\n\n" + paragraph(g, 3) + "\n\n## Guide to the files\n\nEach file is listed below with what it holds and how to use it."
                 else -> paragraph(g, 2)
             }
@@ -109,7 +121,7 @@ object Simulated {
             val file = Regex("""(?m)^File:\s*(\S+)""").find(prompt)?.groupValues?.get(1) ?: "notes.md"
             val tag = if (rev > 0) " (rev $rev)" else ""
             val body = if (file.endsWith(".html") || file.endsWith(".js") || file.endsWith(".css"))
-                "```\n<!-- $file$tag -->\n<main id=\"app\"></main>\n<script>document.getElementById('app').textContent = 'ready'</script>\n```"
+                "```\n<!-- $file$tag -->\n<main id=\"app\">\n  <h1>Ready</h1>\n  <p>Every control on this screen works offline and keeps its state.</p>\n</main>\n<script>\n  const app = document.getElementById('app');\n  app.dataset.state = localStorage.getItem('state') || 'new';\n</script>\n```"
             else "# ${file.substringAfterLast('/').substringBeforeLast('.').replace('_', ' ')}$tag\n\n" + paragraph(g, 3 + rev)
             return body + if (rnd.nextInt(3) == 0) "\n\n[board]\nfact: ${vendor.label} found a benchmark worth reusing in $file" else ""
         }
@@ -137,6 +149,9 @@ object Simulated {
             SENTENCES.shuffled(rnd).take(3).joinToString(" ") { s -> s.replace("{g}", g.take(60)) }
         }
     }
+
+    private val WORK = setOf(Prompts.TICKET, Prompts.REWORK, Prompts.TASK)
+    private val GRADES = setOf(Prompts.GRADE, Prompts.FINAL_QA)
 
     private val SENTENCES = listOf(
         "Here the decisive factor is cost per outcome rather than headline price.",

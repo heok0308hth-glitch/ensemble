@@ -122,13 +122,14 @@ class CrewDesk(
             hold(cur)
             val r = try { send(cur, prompt) } finally { release(cur) }
             val text = r.text.trim()
-            val ok = text.length >= minLen && !refusal(text) && !Vendor.limitHit(r.text, r.via)
+            val echoed = Gate.echo(text, prompt)
+            val ok = text.length >= minLen && !refusal(text) && !Vendor.limitHit(r.text, r.via) && !echoed
             crew.report(cur, ok, clock() - t0, r.text, r.via)
             ledger.add(cur.name, Tokens.estimate(prompt), Tokens.estimate(text))
             if (ok) { thank(cur); return text }
-            failed(cur, text, r.via)
+            val why = if (echoed) ECHOED else reason(r.text, r.via)
+            fails.getOrPut(cur.key) { ConcurrentLinkedQueue() }.add(why)
             val alt = next(skill, tried) ?: break
-            val why = reason(r.text, r.via)
             emit(AgentEvent.Collab(clock(), Move.SWAP, alt.name, "${cur.name}: $why → ${alt.name} takes over"))
             hub.card(jobId, cardId) { it.copy(who = alt.name, vendor = alt.vendor.label, status = CardStatus.SWAPPED, doing = "${cur.name} $why → ${alt.name}") }
             delay(200)
@@ -200,7 +201,11 @@ class CrewDesk(
 
     fun refusal(s: String): Boolean = s.length < 120 && REFUSAL.containsMatchIn(s)
 
-    private companion object {
-        val REFUSAL = Regex("(I can't help|I cannot help|I can't assist|unable to help|죄송하지만|도와드릴 수 없)", RegexOption.IGNORE_CASE)
+    /** Record a failure the caller detected itself (a gate rejection, an unreadable grade). */
+    fun noteFailure(m: CrewMember, why: String) { fails.getOrPut(m.key) { ConcurrentLinkedQueue() }.add(why) }
+
+    companion object {
+        const val ECHOED = "echoed the prompt"
+        private val REFUSAL = Regex("(I can't help|I cannot help|I can't assist|unable to help|죄송하지만|도와드릴 수 없)", RegexOption.IGNORE_CASE)
     }
 }

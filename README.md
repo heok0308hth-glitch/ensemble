@@ -66,7 +66,7 @@ flowchart LR
 | **Dispatch market** | Every member bids on every task: `rate/10 + 0.12·named − 0.22·load/lanes − 0.40·center`. `rate` is the vendor prior bent by live success rate and latency. | The best model no longer swallows the plan. In the benchmark, a planner that names one model for *every* task still ends with the work spread across four. |
 | **Shared board** | Members end replies with a short `[board]` block of facts, decisions, warnings and questions. It is stripped from the deliverable and fed to everyone who starts later. | Members that don't depend on each other still stop duplicating and contradicting each other. |
 | **Rival cross-check** | When a result lands, an idle member from a *different vendor* reviews it in the background. Problems are pinned to the board as warnings that the composer must fix. | Different companies have different blind spots. |
-| **Failover & benching** | Empty replies, refusals, usage-limit notices and HTTP errors hand the same prompt to the next best idle member. Limit hits and auth errors bench a member for 15 minutes. If the center fails, the next best planner takes over. | A quota or an outage costs seconds, not the job. |
+| **Failover & benching** | Empty replies, refusals, usage-limit notices, HTTP errors and replies that merely repeat the prompt hand the same prompt to the next best idle member. Cut-off replies are continued, and nothing is graded or saved before it passes the save gate. Limit hits and auth errors bench a member for 15 minutes. If the center fails, the next best planner takes over. | A quota or an outage costs seconds, not the job. |
 | **Approval gate** | Tools with outside effects need a human "yes". The action is canonicalized (RFC 8785 subset) and hashed, and the hash is sealed into a one-time HMAC token, so a changed recipient or body fails verification. | An agent can't quietly change what you approved. |
 
 The full design, including the prompt protocol and the checkpoint format, is in [docs/architecture.md](docs/architecture.md).
@@ -100,7 +100,7 @@ The members are simulated: each reply takes 20–70 s, scaled by the vendor's sp
 
 - Five vendors finish **1.4× faster** than the strongest model alone, and their output carries about five rival cross-checks per job; the solo run has none.
 - When the lead runs out of quota right after planning, **25 of 25** team runs still finish. The solo run finishes **0 of 25**.
-- With one member rate-limited and another failing a quarter of its calls, every run completes. The cost is about 12 seconds.
+- With one member rate-limited and another failing a quarter of its calls, every run completes. The cost is about six seconds.
 
 The speedup is bounded by the plan's dependency chain and by the center's serial steps (plan, gap check, review). Ensemble says so instead of hiding it. Full table: [docs/bench.md](docs/bench.md) · run it yourself: `./gradlew :samples:bench:run`.
 
@@ -111,13 +111,13 @@ The speedup is bounded by the plan's dependency chain and by the center's serial
 dependencyResolutionManagement { repositories { mavenCentral(); maven("https://jitpack.io") } }
 
 // build.gradle.kts
-dependencies { implementation("com.github.heok0308hth-glitch:ensemble:v0.1.0") }
+dependencies { implementation("com.github.heok0308hth-glitch:ensemble:v0.1.1") }
 ```
 
 It needs JVM 17+. Its only dependencies are `kotlinx-coroutines-core` and `org.json`. On **Android**, the platform already ships `org.json`, so exclude it:
 
 ```kotlin
-implementation("com.github.heok0308hth-glitch:ensemble:v0.1.0") { exclude(group = "org.json", module = "json") }
+implementation("com.github.heok0308hth-glitch:ensemble:v0.1.1") { exclude(group = "org.json", module = "json") }
 ```
 
 ## Connect any model

@@ -133,6 +133,7 @@ object Prompts {
     const val FINAL_QA = "[ensemble:qa]"
     const val REPORT = "[ensemble:report]"
     const val REFORMAT = "[ensemble:reformat]"
+    const val CONTINUE = "[ensemble:continue]"
 
     private val TAG = Regex("""\[ensemble:([a-z-]+)]""")
     fun kindOf(prompt: String): String? = TAG.find(prompt.take(80))?.value

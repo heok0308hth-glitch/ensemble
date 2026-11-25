@@ -69,6 +69,8 @@ class Company(
         @Volatile var attempts = 0
         @Volatile var issues: List<String> = emptyList()
         @Volatile var reviewer = ""
+        /** Saved without a readable grade from any reviewer. */
+        @Volatile var ungraded = false
     }
 
     private val desk = CrewDesk(ctx.jobId, crew, hub, control, emit, clock, ledger)
@@ -285,23 +287,47 @@ class Company(
         t.who = author.name
         hub.card(ctx.jobId, t.id) { it.copy(who = author.name, vendor = author.vendor.label, status = CardStatus.RUNNING, doing = "${Conductor.verb(skill)} · ${t.file}", startedAt = clock()) }
         var best: String? = null
-        var bestScore = -1.0
+        var bestScore = 0.0
+        var graded = false
         var issues: List<String> = emptyList()
+        val echoed = HashSet<String>()
         val maxTry = if (left() < reserve * 2) 1 else 3
         for (attempt in 0 until maxTry) {
-            val prompt = if (attempt == 0) writePrompt(t) else reworkPrompt(t, best.orEmpty(), issues)
+            val prompt = if (best == null) writePrompt(t, issues) else reworkPrompt(t, best, issues)
             val raw = desk.lane(author).withPermit { desk.ask(author, skill, t.id, prompt, minLen = 80) }
             if (raw.isBlank()) break
             hub[ctx.jobId]?.cards?.firstOrNull { it.id == t.id }?.who?.let { n -> desk.member(n)?.let { author = it; t.who = it.name } }
-            val content = shape(desk.absorb(raw, author.name, loud = false), t.file)
+            val content = complete(author, skill, t, shape(desk.absorb(raw, author.name, loud = false), t.file))
+
+            // Save gate first: an echo or a cut-off reply is never graded, never saved.
+            val gate = Gate.check(content, t.file, prompt)
+            if (!gate.ok) {
+                desk.noteFailure(author, if (gate.echo) CrewDesk.ECHOED else if (gate.truncated) "cut off" else "failed the save gate")
+                emit(AgentEvent.Collab(clock(), Move.CHECK, "gate", "${t.file} · ${author.name}: ${gate.reasons.first()}"))
+                hub.card(ctx.jobId, t.id) { it.copy(status = CardStatus.RUNNING, doing = "save gate: ${gate.reasons.first().take(40)}") }
+                issues = gate.reasons
+                t.attempts++
+                if (gate.echo) {
+                    echoed += author.key
+                    author = desk.next(skill, echoed) ?: break
+                    t.who = author.name
+                    hub.card(ctx.jobId, t.id) { it.copy(who = author.name, vendor = author.vendor.label, status = CardStatus.SWAPPED) }
+                }
+                continue
+            }
+
             t.state = TicketState.REVIEW
-            val rv = reviewerFor(author)
-            hub.card(ctx.jobId, t.id) { it.copy(status = CardStatus.CHECKING, doing = "${rv.name} is grading", peer = "") }
-            val (score, iss) = grade(rv, t, content)
-            t.reviewer = rv.name
-            if (score > bestScore) { best = content; bestScore = score }
+            val (score, iss, reviewer) = grade(author, t, content)
+            if (score == null) {
+                // Nobody could grade it. Keep it (it passed the gate) but say so — never pretend it scored the bar.
+                if (!graded) best = content
+                hub.card(ctx.jobId, t.id) { it.copy(peer = "no reviewer could grade · kept as ungraded") }
+                break
+            }
+            t.reviewer = reviewer
+            if (!graded || score > bestScore) { best = content; bestScore = score; graded = true }
             val pass = score >= bar
-            hub.card(ctx.jobId, t.id) { it.copy(peer = "${rv.name} ${fmt(score)} · " + if (pass) "pass" else "${iss.size} fixes") }
+            hub.card(ctx.jobId, t.id) { it.copy(peer = "$reviewer ${fmt(score)} · " + if (pass) "pass" else "${iss.size} fixes") }
             if (pass || attempt == maxTry - 1) break
             issues = iss
             t.attempts++
@@ -311,33 +337,58 @@ class Company(
         val out = best
         if (out == null) {
             t.state = TicketState.FAILED
-            hub.card(ctx.jobId, t.id) { it.copy(status = CardStatus.FAILED, doing = "no answer · reassigned at stand-up", endedAt = clock()) }
+            hub.card(ctx.jobId, t.id) { it.copy(status = CardStatus.FAILED, doing = "no usable answer · reassigned at stand-up", endedAt = clock()) }
         } else {
             files.write(t.file, out)
-            t.score = bestScore
+            t.score = if (graded) bestScore else 0.0
+            t.ungraded = !graded
             t.issues = issues
             t.state = TicketState.DONE
-            hub.card(ctx.jobId, t.id) { it.copy(status = CardStatus.DONE, doing = "${t.file} · ${out.length} chars · ${fmt(bestScore)}", endedAt = clock()) }
-            emit(AgentEvent.Note(clock(), "${t.who} · ${t.title} → ${t.file} (${fmt(bestScore)}, graded by ${t.reviewer})"))
+            val mark = if (graded) fmt(bestScore) else "ungraded"
+            hub.card(ctx.jobId, t.id) { it.copy(status = CardStatus.DONE, doing = "${t.file} · ${out.length} chars · $mark", endedAt = clock()) }
+            emit(AgentEvent.Note(clock(), "${t.who} · ${t.title} → ${t.file} ($mark" + (if (graded) ", graded by ${t.reviewer})" else ")")))
         }
         status()
         checkpoint()
     }
 
-    /** A rival grades: different vendor, not the PM when possible, the best idle critic. */
-    private fun reviewerFor(author: CrewMember): CrewMember {
-        val pool = desk.team.filter { it.vendor != author.vendor && desk.crew.available(it) }
-        val nonCenter = pool.filter { it.key != desk.center?.key }.ifEmpty { pool }
-        return nonCenter.maxByOrNull { Dispatch.bid(desk.crew.rate(it, Skill.REVIEW), desk.busyOf(it), it.lanes, false, desk.team.size, false) }
-            ?: desk.center ?: author
+    /** Ask for the rest of a reply that stopped mid-way, up to twice. */
+    private suspend fun complete(author: CrewMember, skill: Skill, t: Ticket, start: String): String {
+        var c = start
+        repeat(2) {
+            val why = Gate.truncated(c, t.file) ?: return c
+            hub.card(ctx.jobId, t.id) { it.copy(doing = "reply was cut off ($why) · asking for the rest") }
+            val more = desk.lane(author).withPermit { desk.ask(author, skill, t.id, continuePrompt(t, c), minLen = 1) }
+            if (more.isBlank()) return c
+            c = shape(Gate.join(c, desk.absorb(more, author.name, loud = false), t.file), t.file)
+        }
+        return c
     }
 
-    /** (average score, fixes). An unreadable grade counts as the bar so the flow never stalls on format. */
-    private suspend fun grade(rv: CrewMember, t: Ticket, content: String): Pair<Double, List<String>> {
-        val r = desk.once(rv, gradePrompt(t, content))
-        if (r.text.isBlank() || Vendor.limitHit(r.text, r.via)) return bar to emptyList()
-        desk.thank(rv)
-        return parseGrade(r.text) ?: (bar to emptyList())
+    /** A rival grades: different vendor, not the PM when possible, the best idle critic. */
+    private fun reviewerFor(author: CrewMember, exclude: Set<String> = emptySet()): CrewMember? {
+        val pool = desk.team.filter { it.vendor != author.vendor && it.key !in exclude && desk.crew.available(it) }
+        val nonCenter = pool.filter { it.key != desk.center?.key }.ifEmpty { pool }
+        return nonCenter.maxByOrNull { Dispatch.bid(desk.crew.rate(it, Skill.REVIEW), desk.busyOf(it), it.lanes, false, desk.team.size, false) }
+            ?: desk.center?.takeIf { it.key !in exclude && it.key != author.key }
+    }
+
+    /**
+     * (score, fixes, reviewer). Two rivals get a chance; if neither returns a readable grade the
+     * score is null. An unreadable grade is not a pass.
+     */
+    private suspend fun grade(author: CrewMember, t: Ticket, content: String): Triple<Double?, List<String>, String> {
+        val used = HashSet<String>()
+        repeat(2) {
+            val rv = reviewerFor(author, used) ?: return Triple(null, emptyList(), "")
+            used += rv.key
+            hub.card(ctx.jobId, t.id) { it.copy(status = CardStatus.CHECKING, doing = "${rv.name} is grading", peer = "") }
+            val r = desk.once(rv, gradePrompt(t, content))
+            val parsed = if (r.text.isBlank() || Vendor.limitHit(r.text, r.via)) null else parseGrade(r.text)
+            if (parsed != null) { desk.thank(rv); return Triple(parsed.first, parsed.second, rv.name) }
+            if (r.text.isNotBlank()) desk.noteFailure(rv, "unreadable grade")
+        }
+        return Triple(null, emptyList(), "")
     }
 
     // ───────────── stand-up & retro ─────────────
@@ -365,16 +416,50 @@ class Company(
         }
         val done = o?.optBoolean("done", false) == true
         val q = quality()
-        val summary = o?.optString("summary").orEmpty().ifBlank { "status check" }
+        var summary = o?.optString("summary").orEmpty().ifBlank { "status check" }
+        // An unreadable or empty plan must not end the project while work clearly remains.
+        if ((o == null || next.isEmpty()) && needsWork(q)) {
+            val auto = autoplan(sprint + 1)
+            if (auto.isNotEmpty()) {
+                next = next + auto
+                summary = if (o == null) "PM's plan was unreadable — scheduled ${auto.size} tickets from the file status" else "PM added nothing — scheduled ${auto.size} tickets from the file status"
+            }
+        }
         hub.card(ctx.jobId, id) { it.copy(status = CardStatus.DONE, doing = if (next.isEmpty()) "nothing to add" else "${next.size} tickets · ${summary.take(40)}", endedAt = clock()) }
         emit(AgentEvent.Collab(clock(), Move.STANDUP, pm.name, "$summary · ${mins(left())} min left · quality ${fmt(q)}"))
-        val allFiles = charter!!.plan.all { files.read(it.path) != null }
+        val allFiles = charter!!.plan.all { usable(it.path) != null }
         if (next.isEmpty() || (done && allFiles && q >= excellent)) return null
         // Partition before assigning: assign() fills `who`, so filtering afterwards would enqueue a ticket twice.
         val (open, preset) = next.partition { it.who.isBlank() }
         val assigned = (assign(open) + preset).distinctBy { it.id }
         emit(AgentEvent.Collab(clock(), Move.ASSIGN, pm.name, "sprint ${sprint + 1}: " + assigned.joinToString(" · ") { "${it.who} → ${it.title}" }))
         return assigned
+    }
+
+    private fun needsWork(q: Double): Boolean {
+        val c = charter ?: return false
+        return c.plan.any { usable(it.path) == null } || c.plan.any { lastDone(it.path)?.ungraded == true } || q < excellent || qaIssues.isNotEmpty()
+    }
+
+    /** A file's text, if it exists and passes the save gate. Rejected or missing files read as null. */
+    private fun usable(path: String): String? = files.read(path)?.takeIf { Gate.check(it, path).ok }
+
+    /** The stand-up the PM would write from the file status: missing files, ungraded files, then the weakest. */
+    private fun autoplan(sp: Int): List<Ticket> {
+        val c = charter!!
+        val out = ArrayList<Ticket>()
+        fun qa(path: String) = qaIssues.filter { it.contains(path) || it.contains(path.substringAfterLast('/')) }.joinToString(" ").let { if (it.isBlank()) "" else " Final QA: $it" }
+        fun refs(path: String) = c.plan.map { it.path }.filter { it != path && usable(it) != null }.take(3)
+        c.plan.filter { usable(it.path) == null }.forEach { f -> out += Ticket("A$sp-${out.size + 1}", "Write ${f.path}", f.path, f.purpose + qa(f.path), refs(f.path), emptyList(), sp) }
+        c.plan.filter { usable(it.path) != null && lastDone(it.path)?.ungraded == true }.forEach { f ->
+            out += Ticket("A$sp-${out.size + 1}", "Improve ${f.path}", f.path, "Improve this file so it can be graded against the rubric: ${f.purpose}." + qa(f.path), refs(f.path), emptyList(), sp)
+        }
+        c.plan.mapNotNull { f -> lastDone(f.path)?.takeIf { !it.ungraded && it.score < excellent && usable(f.path) != null }?.let { f to it } }
+            .sortedBy { it.second.score }.forEach { (f, d) ->
+                val findings = d.issues.joinToString("; ").ifBlank { "add depth — concrete cases, numbers and sources" }
+                out += Ticket("A$sp-${out.size + 1}", "Rework ${f.path}", f.path, "Raise this file above ${fmt(excellent)} (now ${fmt(d.score)}). Findings: $findings." + qa(f.path), refs(f.path), emptyList(), sp)
+            }
+        return out.distinctBy { it.file }.take(w() * 2)
     }
 
     private fun standupPrompt() = buildString {
@@ -501,11 +586,12 @@ class Company(
             "\nFile plan: " + c.plan.joinToString(", ") { "${it.path} (${it.purpose})" }
     }
 
-    private fun writePrompt(t: Ticket) = buildString {
+    private fun writePrompt(t: Ticket, rejected: List<String> = emptyList()) = buildString {
         appendLine("${Prompts.TICKET} Ticket ${t.id}, assigned to you by PM ${desk.center?.name}. A rival from another company grades the result against the rubric below; under ${fmt(bar)} it comes back.")
         appendLine(charterBrief())
         appendLine(); appendLine("Your ticket: ${t.title}"); appendLine("File: ${t.file}"); appendLine(t.brief)
-        val cur = files.read(t.file)
+        val cur = usable(t.file)
+        if (rejected.isNotEmpty()) { appendLine(); appendLine("Your previous reply was rejected before review:"); rejected.forEach { appendLine("- $it") }; appendLine("Write the actual content this time, complete to the last line.") }
         if (cur != null) { appendLine(); appendLine("Current version of this file — write a better complete version from it: keep what is good, fill the gaps, fix the weak parts:"); appendLine(cur.take(chars / 2)) }
         inputs(t, if (cur != null) chars / 3 else chars * 2 / 3).takeIf { it.isNotBlank() }?.let { appendLine(); appendLine("Reference files:"); appendLine(it) }
         desk.board.digest(1400).takeIf { it.isNotBlank() }?.let { appendLine(); appendLine("[Team board]"); appendLine(it) }
@@ -523,6 +609,13 @@ class Company(
         appendLine("Review findings:"); issues.ifEmpty { listOf("Not deep or concrete enough for the rubric") }.forEach { appendLine("- $it") }
         appendLine("Previous version:"); appendLine(draft.take(chars))
         append(if (isCode(t.file)) "Output the complete fixed file only (one code block)." else "Output the complete revised content only. ${ctx.language.directive()}")
+    }
+
+    private fun continuePrompt(t: Ticket, sofar: String) = buildString {
+        appendLine("${Prompts.CONTINUE} Your reply for ${t.file} (ticket ${t.id}) was cut off.")
+        appendLine("Continue exactly where it stopped. Output only the remaining part — do not repeat anything, do not start over, no preamble.")
+        appendLine("It ended with:")
+        append(sofar.takeLast(500))
     }
 
     private fun gradePrompt(t: Ticket, content: String) = buildString {
@@ -561,14 +654,14 @@ class Company(
         val paths = (t.inputs + synchronized(tickets) { tickets.filter { it.id in t.after }.map { it.file } }).distinct().filter { it != t.file }
         if (paths.isEmpty()) return ""
         val each = budget / paths.size
-        return paths.mapNotNull { p -> files.read(p)?.let { "=== $p ===\n" + it.take(each) } }.joinToString("\n\n")
+        return paths.mapNotNull { p -> usable(p)?.let { "=== $p ===\n" + it.take(each) } }.joinToString("\n\n")
     }
 
     private fun fileStatus() = charter!!.plan.joinToString("\n") { f ->
-        val txt = files.read(f.path)
+        val txt = usable(f.path)
         val last = lastDone(f.path)
-        "- ${f.path} (${f.purpose}): " + if (txt == null) "missing" else "${txt.length} chars · " +
-            (last?.let { "${fmt(it.score)} (${it.who}, graded by ${it.reviewer})" + if (it.issues.isNotEmpty()) " · findings: " + it.issues.take(2).joinToString(" / ") else "" } ?: "not graded")
+        "- ${f.path} (${f.purpose}): " + if (txt == null) (if (files.read(f.path) != null) "rejected by the save gate" else "missing") else "${txt.length} chars · " +
+            (last?.let { if (it.ungraded) "ungraded (no reviewer returned a readable grade)" else "${fmt(it.score)} (${it.who}, graded by ${it.reviewer})" + if (it.issues.isNotEmpty()) " · findings: " + it.issues.take(2).joinToString(" / ") else "" } ?: "not graded")
     }
 
     private fun workLog() = buildString {
@@ -577,14 +670,14 @@ class Company(
         appendLine("| PM | ${desk.center?.name} |")
         appendLine("| Time | ${mins(elapsed())} of ${minutes} min |")
         appendLine("| Sprints | $sprint |")
-        appendLine("| Tickets | ${tickets.count { it.state == TicketState.DONE }} done · ${tickets.sumOf { it.attempts }} reworks · ${tickets.count { it.state == TicketState.FAILED }} failed |")
+        appendLine("| Tickets | ${tickets.count { it.state == TicketState.DONE }} done · ${tickets.sumOf { it.attempts }} reworks · ${tickets.count { it.state == TicketState.FAILED }} failed · ${tickets.count { it.state == TicketState.DONE && it.ungraded }} ungraded |")
         appendLine("| Final QA | ${fmt(qa)} / 10 |")
         appendLine("| Tokens (est.) | ${Tokens.fmt(ledger.total())} |")
         appendLine(); appendLine("| Member | Finished | Failed (why) |"); appendLine("|---|---|---|")
         desk.roll().forEach { (n, done, why) -> appendLine("| $n${if (n == desk.center?.name) " (PM)" else ""} | $done | ${why.ifBlank { "—" }} |") }
         if (history.isNotEmpty()) { appendLine(); appendLine("Average score by sprint: " + history.joinToString(" → ") { "S${it.first} ${fmt(it.second)}" }) }
         appendLine(); appendLine("| Ticket | File | Author | Reviewer | Score |"); appendLine("|---|---|---|---|---|")
-        tickets.filter { it.state == TicketState.DONE }.forEach { appendLine("| ${it.id} ${it.title.replace("|", "/")} | ${it.file} | ${it.who} | ${it.reviewer} | ${fmt(it.score)} |") }
+        tickets.filter { it.state == TicketState.DONE }.forEach { appendLine("| ${it.id} ${it.title.replace("|", "/")} | ${it.file} | ${it.who} | ${it.reviewer.ifBlank { "—" }} | ${if (it.ungraded) "ungraded" else fmt(it.score)} |") }
     }
 
     // ───────────── state ─────────────
@@ -627,7 +720,7 @@ class Company(
             tickets.map { t ->
                 JSONObject().put("id", t.id).put("title", t.title).put("file", t.file).put("brief", t.brief)
                     .put("inputs", JSONArray(t.inputs)).put("after", JSONArray(t.after)).put("sprint", t.sprint).put("state", t.state.name).put("who", t.who)
-                    .put("score", t.score).put("attempts", t.attempts).put("reviewer", t.reviewer).put("issues", JSONArray(t.issues))
+                    .put("score", t.score).put("attempts", t.attempts).put("reviewer", t.reviewer).put("issues", JSONArray(t.issues)).put("ungraded", t.ungraded)
             }
         }))
         put("decisions", JSONArray(decisions.toList()))
@@ -654,7 +747,7 @@ class Company(
                     val st = runCatching { TicketState.valueOf(t.optString("state")) }.getOrDefault(TicketState.TODO)
                     k.state = if (st == TicketState.DOING || st == TicketState.REVIEW) TicketState.TODO else st   // half-done tickets restart
                     k.who = t.optString("who"); k.score = t.optDouble("score", 0.0); k.attempts = t.optInt("attempts")
-                    k.reviewer = t.optString("reviewer"); k.issues = JsonPick.strings(t.optJSONArray("issues"))
+                    k.reviewer = t.optString("reviewer"); k.issues = JsonPick.strings(t.optJSONArray("issues")); k.ungraded = t.optBoolean("ungraded")
                 }
             }
         }
@@ -673,7 +766,9 @@ class Company(
     private fun shape(text: String, path: String): String {
         if (!isCode(path)) return text.trim()
         val blocks = Regex("""```[\w+#.-]*[^\n]*\n([\s\S]*?)```""").findAll(text).map { it.groupValues[1] }.toList()
-        return (blocks.maxByOrNull { it.length } ?: text).trimEnd() + "\n"
+        // An opening fence that never closed (a cut-off reply): keep the code, drop the fence line.
+        val bare = if (blocks.isEmpty() && text.trimStart().startsWith("```")) text.trimStart().substringAfter('\n') else text
+        return (blocks.maxByOrNull { it.length } ?: bare).trimEnd() + "\n"
     }
 
     private fun isCode(p: String) = CODE_FILE.containsMatchIn(p)

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.1] — 2026-11-25
+
+Fixes from a real failure in which a project saved its own instructions as deliverables.
+
+### Fixed
+- Replies that repeat the prompt are no longer accepted as answers (`Gate.echo`); the desk hands the work to someone else.
+- Cut-off replies are continued from where they stopped instead of being saved (`Gate.truncated`, `Gate.join`).
+- An unreadable grade no longer counts as the bar. A second rival grades; otherwise the file is marked **ungraded**.
+- An unreadable or empty stand-up no longer ends a project early; tickets are planned from the file status.
+- Files that fail the save gate are never shown to authors as the current version.
+
+### Added
+- `Gate` (public): `check`, `echo`, `truncated`, `join`.
+- `Simulated.Profile(echoRate, cutRate, unreadableGradeRate)` to test these failures.
+
 ## [0.1.0] — 2026-11-24
 
 First public release, split out of the HJTK Android app.

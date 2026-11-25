@@ -65,11 +65,18 @@ Structured replies are JSON objects. `JsonPick.obj` takes the first balanced obj
 | `HTTP401/403`, login or challenge pages | port `via` | same, benched |
 | center failure | `askCenter` | next best planner takes the baton (`Move.CENTER` event) |
 | tool failed or returned nothing | `Conductor.toolTask` | a research-strong member does it directly |
-| unreadable grade | `Company.grade` | counted as the bar, so the flow continues |
+| reply repeats the prompt (a client read the user's own bubble) | `Gate.echo` in `CrewDesk.ask` and before saving | same prompt to someone else; the member is noted for `echoed the prompt` |
+| reply stops mid-way (open quote, half a table row, unclosed code) | `Gate.truncated` | the author is asked to continue from where it stopped, up to twice; still cut → rejected |
+| unreadable grade | `Company.grade` | a second rival grades; if neither is readable the file is kept as **ungraded**, never scored |
+| unreadable or empty stand-up while work remains | `Company.standup` | tickets are planned from the file status: missing → ungraded → weakest files |
 
 Failure reasons are recorded per member: `usage limit`, `signed out`, `blocked`, `server error`, `network error`, `empty reply`, `weak reply`. They appear in the project work log, so "did it refuse or could it not?" has an answer.
 
 `Outcome.partial` is true when some work never came back and the deliverable was assembled from what did.
+
+## The save gate
+
+Every file passes `Gate.check` before it is graded or written: no echo of the instruction, no truncation, no leftover board block, and real substance. Files already in the workspace that fail the gate are treated as missing, so a bad version is never fed back to the next author as "the current version". The gate came from a real run in which four files that held only their own tickets each scored 8.0 because the reviewer returned nothing and an unreadable grade counted as the bar.
 
 ## Pause and abort
 
